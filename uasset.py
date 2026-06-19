@@ -1,5 +1,5 @@
 from __future__ import annotations
-import io, uuid, time, os, glob, json
+import io, uuid, time, os, glob, json, zlib
 from struct import *
 from ctypes import *
 from pathlib import Path
@@ -14,11 +14,17 @@ logging = True
 try_unknown_structs = False
 
 class ByteStream:
-    def __init__(self, byte_stream:io.BufferedReader): self.byte_stream = byte_stream
-    def __repr__(self) -> str: return f"\"{self.byte_stream.name}\"[{'Closed' if self.byte_stream.closed else self.Position()}]"
+    def __init__(self, byte_stream:io.BufferedReader, name=None, mode=None):
+        self.byte_stream = byte_stream
+        self.name = name if name is not None else getattr(byte_stream, 'name', '<memory>')
+        self.mode = mode if mode is not None else getattr(byte_stream, 'mode', 'rb')
+    @classmethod
+    def FromBytes(cls, data:bytes, name='<memory>'):
+        return cls(io.BytesIO(data), name=name, mode='rb')
+    def __repr__(self) -> str: return f"\"{self.name}\"[{'Closed' if self.byte_stream.closed else self.Position()}]"
     
     def EnsureOpen(self):
-        if self.byte_stream.closed: self.byte_stream = open(self.byte_stream.name, self.byte_stream.mode)
+        if self.byte_stream.closed: self.byte_stream = open(self.name, self.mode)
     def ReadBytes(self, count) -> bytes: return self.byte_stream.read(count)
     def Seek(self, offset, mode=io.SEEK_SET): self.byte_stream.seek(offset, mode)
     def Position(self): return self.byte_stream.tell()
@@ -444,8 +450,10 @@ class USummary:
         engine_version = EngineVersion.Read(f) if version_ue4 >= 336 else EngineVersion(4,0,0,f.ReadUInt32(),"")
         self.compatible_version = EngineVersion.Read(f) if version_ue4 >= 444 else engine_version
         self.compression_flags = f.ReadUInt32()
-        compressed_chunks_count = f.ReadInt32()
-        if compressed_chunks_count > 0: raise Exception("Asset has package-level compression and is likely too old to be parsed")
+        self.compressed_chunks_count = f.ReadInt32()
+        self.compressed_chunks = []
+        for i in range(self.compressed_chunks_count):
+            self.compressed_chunks.append((f.ReadInt32(), f.ReadInt32(), f.ReadInt32()))
         self.package_source = f.ReadUInt32()
         for i in range(f.ReadInt32()): self.package = f.ReadFString()
         if self.version_legacy > -7:
@@ -513,12 +521,56 @@ class UAsset:
             self.name2exp = {}
             for exp in self.exports: self.name2exp[exp.object_name] = exp
 
+    def _DecompressPackage(self, summary:USummary) -> ByteStream:
+        compressed_data_pos = self.f.Position()
+
+        def build_package_data(size_order=(1, 2)):
+            self.f.Seek(0)
+            header = self.f.ReadBytes(compressed_data_pos)
+            package_data = bytearray(header)
+
+            for chunk in summary.compressed_chunks:
+                uncompressed_offset = chunk[0]
+                uncompressed_size = chunk[size_order[0]]
+                compressed_size = chunk[size_order[1]]
+                compressed = self.f.ReadBytes(compressed_size)
+                if len(compressed) != compressed_size:
+                    raise Exception("Unexpected end of compressed package data")
+                try:
+                    decompressed = zlib.decompress(compressed)
+                except zlib.error as exc:
+                    raise Exception(f"Failed to decompress package chunk at {uncompressed_offset}: {exc}") from exc
+
+                if len(decompressed) != uncompressed_size:
+                    raise Exception(
+                        f"Decompressed chunk size mismatch at {uncompressed_offset}: expected {uncompressed_size}, got {len(decompressed)}"
+                    )
+
+                chunk_end = uncompressed_offset + uncompressed_size
+                if len(package_data) < chunk_end:
+                    package_data.extend(b"\0" * (chunk_end - len(package_data)))
+                package_data[uncompressed_offset:chunk_end] = decompressed
+
+            return bytes(package_data)
+
+        last_error = None
+        for size_order in ((1, 2), (2, 1)):
+            try:
+                return ByteStream.FromBytes(build_package_data(size_order), self.filepath)
+            except Exception as exc:
+                last_error = exc
+
+        raise last_error
+
     def TryReadPropertyGuid(self) -> uuid.UUID: return self.f.ReadGuid() if self.summary.version_ue4 >= 503 and self.f.ReadBool() else None
     #def TryReadProperty(self): # TODO
     def Read(self, read_all=True, log=False): # PackageReader.cpp
         t0 = time.time()
         self.f = ByteStream(open(self.filepath, 'rb'))
         self.summary = summary = USummary(self)
+
+        if summary.compressed_chunks_count > 0:
+            self.f = self._DecompressPackage(summary)
 
         self.names:list[str] = []
         if summary.names_desc.TrySeek(self.f):
