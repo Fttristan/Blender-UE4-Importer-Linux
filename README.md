@@ -27,6 +27,10 @@ Blender addon to import Unreal Engine 4 asset files. [Download the latest releas
 - Skeletal meshes import as rigid meshes. The vertex groups are correct, getting the correct orientation of the bones is tripping me up so I'm excluding the armature for now.
 - BSP and terrain is MIA, I may support this if requested enough.
 
+## Linux Notes
+- Place a Linux `umodel` binary next to the addon or set `UMODEL_PATH` to its full path.
+- If Unreal is installed somewhere nonstandard, set `UE_ENGINE_DIR` to the Unreal `Engine` directory so `/Engine/...` assets resolve correctly.
+
 ## UMap Support
 | Element | Support | Notes |
 | :------ | :-----: | :---- |

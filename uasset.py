@@ -1,8 +1,14 @@
 from __future__ import annotations
-import io, uuid, time, os, glob, json, winreg
+import io, uuid, time, os, glob, json
 from struct import *
 from ctypes import *
+from pathlib import Path
 from mathutils import *
+
+try:
+    import winreg
+except ImportError:
+    winreg = None
 
 logging = True
 try_unknown_structs = False
@@ -454,12 +460,33 @@ class USummary:
         if version_ue4 >= 507: self.preload_depends_desc = ArrayDesc(f)
 class UProject:
     def __init__(self, uasset_path:str):
-        self.dir = uasset_path[:uasset_path.find("\\Content\\")]
-        uproject_file = next(glob.iglob(f'{self.dir}\\*.uproject'), None)
+        asset_path = Path(os.path.normpath(uasset_path))
+        project_dir = None
+        for parent in [asset_path.parent, *asset_path.parents]:
+            if parent.name == "Content":
+                project_dir = parent.parent
+                break
+
+        self.dir = str(project_dir if project_dir else asset_path.parent)
+        uproject_file = next(Path(self.dir).glob("*.uproject"), None)
         if uproject_file:
-            with open(uproject_file, 'r') as file: engine_version = json.load(file)['EngineAssociation']
-            self.engine_dir = winreg.QueryValueEx(winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\EpicGames\Unreal Engine\{engine_version}"), "InstalledDirectory")[0] + "\\Engine\\"
-        else: self.engine_dir = self.dir
+            with open(uproject_file, 'r') as file:
+                engine_version = json.load(file)['EngineAssociation']
+
+            engine_dir = os.environ.get("UE_ENGINE_DIR") or os.environ.get("UE4_ENGINE_DIR") or os.environ.get("UNREAL_ENGINE_DIR")
+            if not engine_dir and winreg:
+                engine_dir = winreg.QueryValueEx(winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\EpicGames\Unreal Engine\{engine_version}"), "InstalledDirectory")[0]
+                engine_dir = os.path.join(engine_dir, "Engine")
+
+            if engine_dir:
+                engine_dir = os.path.normpath(engine_dir)
+                if not os.path.isdir(os.path.join(engine_dir, "Content")) and os.path.isdir(os.path.join(engine_dir, "Engine", "Content")):
+                    engine_dir = os.path.join(engine_dir, "Engine")
+                self.engine_dir = os.path.normpath(engine_dir)
+            else:
+                self.engine_dir = self.dir
+        else:
+            self.engine_dir = self.dir
 class UAsset:
     def __init__(self, filepath:str, read_all=False, uproject=None):
         self.filepath = os.path.normpath(filepath)
@@ -477,6 +504,7 @@ class UAsset:
         elif i > 0: return self.GetExport(i)
         else: return None #raise Exception("Invalid Package Index of 0")
     def ToProjectPath(self, path:str):
+        path = path.replace("\\", "/")
         if path.startswith("/Game/"): return os.path.join(self.uproject.dir, "Content", path[6:]) + ".uasset"
         elif path.startswith("/Engine/"): return os.path.join(self.uproject.engine_dir, "Content", path[8:]) + ".uasset"
         else: raise

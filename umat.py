@@ -1,5 +1,5 @@
 from __future__ import annotations
-import bpy, sys, time, os, pathlib, subprocess, importlib
+import bpy, sys, time, os, pathlib, subprocess, importlib, shutil
 from struct import *
 from mathutils import *
 from bpy.props import *
@@ -10,7 +10,30 @@ if cur_dir not in sys.path: sys.path.append(cur_dir)
 import uasset, register_helper
 from uasset import UAsset, Import, Export, Properties, UProperty
 
-umodel_path = cur_dir + r"\umodel.exe"
+def resolve_umodel_path():
+    global umodel_path
+    if umodel_path:
+        return umodel_path
+
+    env_path = os.environ.get("UMODEL_PATH")
+    if env_path:
+        umodel_path = env_path
+        return umodel_path
+
+    for candidate in ("umodel", "umodel.exe", "umodel.sh"):
+        candidate_path = os.path.join(cur_dir, candidate)
+        if os.path.isfile(candidate_path):
+            umodel_path = candidate_path
+            return umodel_path
+
+    which_path = shutil.which("umodel")
+    if which_path:
+        umodel_path = which_path
+        return umodel_path
+
+    raise FileNotFoundError("Could not locate umodel. Set UMODEL_PATH or place an executable named umodel next to the addon.")
+
+umodel_path = None
 mute_ior = True
 mute_fresnel = True
 
@@ -30,7 +53,7 @@ def TryGetExtractedImport(imp:Import, extract_dir):
             asset_path = imp.asset.ToProjectPath(archive_path)
             extract_dir = os.path.join(extract_dir, "Engine" if archive_path.startswith("/Engine/") else "Game")
             print(f"Extracting {asset_path}")
-            subprocess.run(f"\"{umodel_path}\" -export -png -out=\"{extract_dir}\" \"{asset_path}\"")
+            subprocess.run([resolve_umodel_path(), "-export", "-png", f"-out={extract_dir}", asset_path], check=False)
         try:
             imp.extracted = tex = bpy.data.images.load(extracted_path, check_existing=True)
 
