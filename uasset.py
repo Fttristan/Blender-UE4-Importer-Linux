@@ -524,6 +524,12 @@ class UAsset:
     def _DecompressPackage(self, summary:USummary) -> ByteStream:
         compressed_data_pos = self.f.Position()
 
+        def decompress_chunk(data:bytes) -> bytes:
+            try:
+                return zlib.decompress(data)
+            except zlib.error:
+                return zlib.decompress(data, -zlib.MAX_WBITS)
+
         def build_package_data(size_order=(1, 2)):
             self.f.Seek(0)
             header = self.f.ReadBytes(compressed_data_pos)
@@ -537,7 +543,7 @@ class UAsset:
                 if len(compressed) != compressed_size:
                     raise Exception("Unexpected end of compressed package data")
                 try:
-                    decompressed = zlib.decompress(compressed)
+                    decompressed = decompress_chunk(compressed)
                 except zlib.error as exc:
                     raise Exception(f"Failed to decompress package chunk at {uncompressed_offset}: {exc}") from exc
 
