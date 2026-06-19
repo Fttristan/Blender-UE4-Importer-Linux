@@ -450,11 +450,47 @@ class USummary:
         engine_version = EngineVersion.Read(f) if version_ue4 >= 336 else EngineVersion(4,0,0,f.ReadUInt32(),"")
         self.compatible_version = EngineVersion.Read(f) if version_ue4 >= 444 else engine_version
         self.compression_flags = f.ReadUInt32()
-        self.compressed_chunks_count = f.ReadInt32()
+        self.package_source = None
+        self.compressed_chunks_count = 0
         self.compressed_chunks = []
-        for i in range(self.compressed_chunks_count):
-            self.compressed_chunks.append((f.ReadInt32(), f.ReadInt32(), f.ReadInt32()))
-        self.package_source = f.ReadUInt32()
+
+        if self.compression_flags != 0:
+            compression_block_pos = f.Position()
+            block_end = f.byte_stream.seek(0, io.SEEK_END)
+            f.Seek(compression_block_pos)
+            remaining_bytes = block_end - compression_block_pos
+
+            def read_compressed_chunks(count:int):
+                chunks = []
+                for i in range(count):
+                    chunks.append((f.ReadInt32(), f.ReadInt32(), f.ReadInt32()))
+                return chunks
+
+            def try_layout(package_source_first:bool):
+                f.Seek(compression_block_pos)
+                package_source = f.ReadUInt32() if package_source_first else None
+                compressed_chunks_count = f.ReadInt32()
+                if compressed_chunks_count < 0:
+                    raise Exception("Negative compressed chunk count")
+                if compressed_chunks_count * 12 > remaining_bytes:
+                    raise Exception("Compressed chunk table does not fit in file")
+                compressed_chunks = read_compressed_chunks(compressed_chunks_count)
+                if not package_source_first:
+                    package_source = f.ReadUInt32()
+                return package_source, compressed_chunks_count, compressed_chunks
+
+            last_error = None
+            for package_source_first in (False, True):
+                try:
+                    self.package_source, self.compressed_chunks_count, self.compressed_chunks = try_layout(package_source_first)
+                    break
+                except Exception as exc:
+                    last_error = exc
+            else:
+                raise last_error
+        else:
+            self.package_source = f.ReadUInt32()
+
         for i in range(f.ReadInt32()): self.package = f.ReadFString()
         if self.version_legacy > -7:
             texture_alloc_count = f.ReadInt32()
