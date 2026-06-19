@@ -447,29 +447,9 @@ class USummary:
         generation_count = f.ReadInt32()
         assert generation_count >= 0
         for i in range(generation_count): gen_export_count, get_name_count = (f.ReadInt32(), f.ReadInt32())
-        engine_block_pos = f.Position()
-
-        def read_engine_version() -> EngineVersion:
-            if version_ue4 >= 336:
-                return EngineVersion.Read(f)
-            return EngineVersion(4, 0, 0, f.ReadUInt32(), "")
-
-        def try_engine_layout(full_version:bool):
-            f.Seek(engine_block_pos)
-            engine_version = EngineVersion.Read(f) if full_version else EngineVersion(4, 0, 0, f.ReadUInt32(), "")
-            compatible_version = EngineVersion.Read(f) if (full_version or version_ue4 >= 444) else engine_version
-            compression_flags = f.ReadUInt32()
-            return engine_version, compatible_version, compression_flags
-
-        last_error = None
-        for full_version in (True, False):
-            try:
-                engine_version, self.compatible_version, self.compression_flags = try_engine_layout(full_version)
-                break
-            except Exception as exc:
-                last_error = exc
-        else:
-            raise last_error
+        engine_version = EngineVersion.Read(f) if version_ue4 >= 336 else EngineVersion(4, 0, 0, f.ReadUInt32(), "")
+        self.compatible_version = EngineVersion.Read(f) if version_ue4 >= 444 else engine_version
+        self.compression_flags = f.ReadUInt32()
         self.package_source = None
         self.compressed_chunks_count = 0
         self.compressed_chunks = []
